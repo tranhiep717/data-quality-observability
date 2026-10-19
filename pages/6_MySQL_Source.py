@@ -1,7 +1,8 @@
 
+from mysql.connector import authentication
 import streamlit as st
 import pandas as pd
-
+import time
 from modules.database import ket_noi_database
 from modules.ingestion import (
     doc_bang_mysql_nguon,
@@ -254,10 +255,100 @@ if (
     )
 
     
+   
+    # Hạn chế chạy liên tiếp trong cùng phiên Streamlit
+    key_run = f"last_run_mysql_{dataset_id}"
+
+    lan_chay_truoc = st.session_state.get(key_run, 0)
+    thoi_gian_con_lai = 5 - (time.monotonic() - lan_chay_truoc)
+
+    if thoi_gian_con_lai > 0:
+        st.info(
+            f"Vui lòng chờ khoảng "
+            f"{thoi_gian_con_lai:.0f} giây trước khi chạy lại."
+        )
+
     if st.button(
         "Chạy kiểm tra chất lượng MySQL",
-        type="primary"
+        type="primary",
+        disabled=thoi_gian_con_lai > 0
     ):
+        st.session_state[key_run] = time.monotonic()
+        try:
+            # Đọc lại dữ liệu mới nhất từ MySQL
+            df_moi = doc_bang_mysql_nguon(
+                database_name,
+                selected_table
+            )
+
+            # Không chạy với dữ liệu rỗng
+            if df_moi.empty:
+                st.warning(
+                    "Bảng MySQL không có dữ liệu để kiểm tra."
+                )
+                st.stop()
+
+            # Kiểm tra lại cột theo dữ liệu mới nhất
+            missing_columns = [
+                rule["column_name"]
+                for rule in active_rules
+                if rule["column_name"] not in df_moi.columns
+            ]
+
+            if missing_columns:
+                st.error(
+                    "Dữ liệu mới thiếu các cột có quy tắc: "
+                    + ", ".join(
+                        sorted(set(missing_columns))
+                    )
+                )
+                st.stop()
+
+            # Chạy Quality Engine
+            result = chay_kiem_tra(
+                df_moi,
+                dataset_id
+            )
+
+            # Cập nhật DataFrame trong session
+            st.session_state["mysql_source_df"] = df_moi
+
+        except Exception as e:
+            st.error(f"Kiểm tra thất bại: {e}")
+        
+        else:
+            st.session_state[key_run] = time.monotonic()
+            st.success(
+                "Đã kiểm tra dữ liệu MySQL mới nhất!"
+            )
+
+            st.write(
+                "Run ID:",
+                result["run_id"]
+            )
+
+            st.metric(
+                "Quality Score",
+                f"{result['quality_score']:.2f}%"
+            )
+
+            st.dataframe(
+                pd.DataFrame(result["results"]),
+                width="stretch"
+            )
+
+            # Tạo cảnh báo
+            try:
+                kiem_tra_canh_bao(dataset_id)
+                kiem_tra_canh_bao_monitoring(dataset_id)
+
+                st.success("Đã cập nhật Monitoring và Alerts.")
+
+            except Exception as e:
+                st.warning(
+                    "Đã lưu Quality Check nhưng cập nhật "
+                    f"cảnh báo gặp lỗi: {e}"
+                )
         try:
             # Đọc lại dữ liệu mới nhất từ MySQL
             df_moi = doc_bang_mysql_nguon(
