@@ -8,6 +8,7 @@ try:
     bang = kiem_tra_ket_noi()
     st.success("Kết nối MySQL thành công!")
     st.write("Các bảng trong database:")
-    st.write([item[0] for item in bang])
+    st.write(bang)
+
 except Exception as e:
     st.error(f"Kết nối thất bại: {e}")

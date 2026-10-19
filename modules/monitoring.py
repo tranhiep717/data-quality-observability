@@ -1,0 +1,156 @@
+
+import pandas as pd
+from modules.database import ket_noi_database
+
+
+def lay_lich_su(dataset_id):
+    conn = ket_noi_database()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute("""
+                SELECT
+                    run_id,
+                    dataset_id,
+                    started_at,
+                    finished_at,
+                    status,
+                    total_rows,
+                    quality_score
+                FROM pipeline_runs
+                WHERE dataset_id = %s
+                ORDER BY started_at ASC, run_id ASC
+            """, (dataset_id,))
+
+            rows = cursor.fetchall()
+            return pd.DataFrame(rows)
+        finally:
+            cursor.close()
+    finally:
+        conn.close()
+
+
+def so_sanh_lan_chay(dataset_id):
+    df = lay_lich_su(dataset_id)
+
+    if df.empty:
+        return {"message": "Chưa có lịch sử kiểm tra"}
+
+    df = df[df["status"] == "SUCCESS"].copy()
+
+    if len(df) < 2:
+        return {
+            "message": "Cần ít nhất 2 lần chạy thành công để so sánh"
+        }
+
+    previous = df.iloc[-2]
+    current = df.iloc[-1]
+
+    old_score = float(previous["quality_score"])
+    new_score = float(current["quality_score"])
+
+    return {
+        "previous_run": int(previous["run_id"]),
+        "current_run": int(current["run_id"]),
+        "previous_score": old_score,
+        "current_score": new_score,
+        "difference": round(new_score - old_score, 2)
+    }
+
+import json
+
+
+def so_sanh_metrics(dataset_id):
+    conn = ket_noi_database()
+
+    try:
+        cursor = conn.cursor(dictionary=True)
+
+        try:
+            cursor.execute("""
+                SELECT
+                    dm.run_id,
+                    dm.row_count,
+                    dm.column_count,
+                    dm.null_count,
+                    dm.duplicate_count,
+                    dm.schema_snapshot
+                FROM dataset_metrics dm
+                JOIN pipeline_runs pr
+                    ON dm.run_id = pr.run_id
+                WHERE dm.dataset_id = %s
+                  AND pr.status = 'SUCCESS'
+                ORDER BY pr.started_at DESC, pr.run_id DESC
+                LIMIT 2
+            """, (dataset_id,))
+
+            rows = cursor.fetchall()
+
+        finally:
+            cursor.close()
+
+    finally:
+        conn.close()
+
+    if len(rows) < 2:
+        return {
+            "message": "Cần ít nhất 2 lần chạy để so sánh"
+        }
+
+    current = rows[0]
+    previous = rows[1]
+
+    def parse_schema(value):
+        if isinstance(value, str):
+            return json.loads(value)
+        return value or {}
+
+    old_schema = parse_schema(previous["schema_snapshot"])
+    new_schema = parse_schema(current["schema_snapshot"])
+
+    old_columns = set(old_schema)
+    new_columns = set(new_schema)
+
+    changed_types = {
+        col: {
+            "old": old_schema[col],
+            "new": new_schema[col]
+        }
+        for col in old_columns & new_columns
+        if old_schema[col] != new_schema[col]
+    }
+
+    return {
+        "previous_run": previous["run_id"],
+        "current_run": current["run_id"],
+
+        "row_difference": (
+            current["row_count"] -
+            previous["row_count"]
+        ),
+
+        "null_difference": (
+            current["null_count"] -
+            previous["null_count"]
+        ),
+
+        "duplicate_difference": (
+            current["duplicate_count"] -
+            previous["duplicate_count"]
+        ),
+
+        "column_difference": (
+            current["column_count"] -
+            previous["column_count"]
+        ),
+
+        "added_columns": sorted(
+            new_columns - old_columns
+        ),
+
+        "removed_columns": sorted(
+            old_columns - new_columns
+        ),
+
+        "changed_types": changed_types
+    }
