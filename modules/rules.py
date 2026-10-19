@@ -1,5 +1,5 @@
 import json
-
+import re
 from modules.database import ket_noi_database
 
 
@@ -12,6 +12,65 @@ RULE_TYPES = {
     "ALLOWED_VALUES",
     "REGEX",
 }
+
+def kiem_tra_cau_hinh_quy_tac(rule_type, rule_config):
+    """Kiểm tra cấu hình quy tắc trước khi lưu MySQL."""
+
+    if not isinstance(rule_config, dict):
+        raise ValueError(
+            "Cấu hình quy tắc phải là dictionary"
+        )
+
+    if rule_type in {"BETWEEN", "MIN_VALUE", "MAX_VALUE"}:
+        required = (
+            ["min", "max"] if rule_type == "BETWEEN"
+            else ["min"] if rule_type == "MIN_VALUE"
+            else ["max"]
+        )
+
+        for key in required:
+            if key not in rule_config:
+                raise ValueError(
+                    f"Thiếu tham số '{key}'"
+                )
+
+            value = rule_config[key]
+
+            if isinstance(value, bool) or not isinstance(
+                value, (int, float)
+            ):
+                raise ValueError(
+                    f"Tham số '{key}' phải là số"
+                )
+
+        if rule_type == "BETWEEN":
+            if rule_config["min"] > rule_config["max"]:
+                raise ValueError(
+                    "Giá trị min không được lớn hơn max"
+                )
+
+    elif rule_type == "ALLOWED_VALUES":
+        values = rule_config.get("values")
+
+        if not isinstance(values, list) or not values:
+            raise ValueError(
+                "ALLOWED_VALUES cần danh sách values không rỗng"
+            )
+
+    elif rule_type == "REGEX":
+        pattern = rule_config.get("pattern")
+
+        if not isinstance(pattern, str) or not pattern:
+            raise ValueError(
+                "REGEX cần pattern không rỗng"
+            )
+
+        try:
+            re.compile(pattern)
+        except re.error as e:
+            raise ValueError(
+                f"Biểu thức REGEX không hợp lệ: {e}"
+            ) from e
 
 
 def them_quy_tac(dataset_id, column_name, rule_type, rule_config=None):
@@ -27,6 +86,7 @@ def them_quy_tac(dataset_id, column_name, rule_type, rule_config=None):
 
     if rule_config is None:
         rule_config = {}
+    kiem_tra_cau_hinh_quy_tac(rule_type, rule_config)
 
     conn = ket_noi_database()
     cursor = conn.cursor()

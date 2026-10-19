@@ -1,12 +1,17 @@
 
+import json
 import pandas as pd
+
 from modules.database import ket_noi_database
 
 
 def lay_lich_su(dataset_id):
+    """Lấy lịch sử các lần kiểm tra."""
     conn = ket_noi_database()
+
     try:
         cursor = conn.cursor(dictionary=True)
+
         try:
             cursor.execute("""
                 SELECT
@@ -24,13 +29,16 @@ def lay_lich_su(dataset_id):
 
             rows = cursor.fetchall()
             return pd.DataFrame(rows)
+
         finally:
             cursor.close()
+
     finally:
         conn.close()
 
 
 def so_sanh_lan_chay(dataset_id):
+    """So sánh Quality Score giữa hai Run thành công."""
     df = lay_lich_su(dataset_id)
 
     if df.empty:
@@ -57,10 +65,9 @@ def so_sanh_lan_chay(dataset_id):
         "difference": round(new_score - old_score, 2)
     }
 
-import json
-
 
 def so_sanh_metrics(dataset_id):
+    """So sánh Volume, NULL, Duplicate và Schema."""
     conn = ket_noi_database()
 
     try:
@@ -120,28 +127,42 @@ def so_sanh_metrics(dataset_id):
         if old_schema[col] != new_schema[col]
     }
 
-    return {
-        "previous_run": previous["run_id"],
-        "current_run": current["run_id"],
+    previous_rows = int(previous["row_count"])
+    current_rows = int(current["row_count"])
 
-        "row_difference": (
-            current["row_count"] -
-            previous["row_count"]
-        ),
+    row_difference = current_rows - previous_rows
+
+    # Tránh chia cho 0 khi Run trước có 0 dòng
+    if previous_rows > 0:
+        row_change_percent = round(
+            row_difference / previous_rows * 100,
+            2
+        )
+    else:
+        row_change_percent = None
+
+    return {
+        "previous_run": int(previous["run_id"]),
+        "current_run": int(current["run_id"]),
+
+        "previous_row_count": previous_rows,
+        "current_row_count": current_rows,
+        "row_difference": row_difference,
+        "row_change_percent": row_change_percent,
 
         "null_difference": (
-            current["null_count"] -
-            previous["null_count"]
+            int(current["null_count"])
+            - int(previous["null_count"])
         ),
 
         "duplicate_difference": (
-            current["duplicate_count"] -
-            previous["duplicate_count"]
+            int(current["duplicate_count"])
+            - int(previous["duplicate_count"])
         ),
 
         "column_difference": (
-            current["column_count"] -
-            previous["column_count"]
+            int(current["column_count"])
+            - int(previous["column_count"])
         ),
 
         "added_columns": sorted(
