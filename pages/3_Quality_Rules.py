@@ -8,7 +8,15 @@ from modules.database import ket_noi_database
 st.title("Quản lý quy tắc kiểm tra")
 st.write("Thêm, chỉnh sửa và bật/tắt quy tắc chất lượng dữ liệu.")
 
-RULE_TYPES = ["NOT_NULL", "UNIQUE", "BETWEEN"]
+RULE_TYPES = [
+    "NOT_NULL",
+    "UNIQUE",
+    "BETWEEN",
+    "MIN_VALUE",
+    "MAX_VALUE",
+    "ALLOWED_VALUES",
+    "REGEX"
+]
 
 
 def truy_van(sql, params=()):
@@ -59,18 +67,81 @@ def lay_rules(dataset_id):
     """, (dataset_id,))
 
 
-def tao_config(rule_type, minimum, maximum):
+def tao_config(
+    rule_type,
+    minimum=0.0,
+    maximum=100.0,
+    allowed_values="",
+    regex_pattern=""
+):
+    """Tạo cấu hình JSON cho từng loại Quality Rule."""
+
     if rule_type == "BETWEEN":
         if minimum > maximum:
             raise ValueError(
-                "Giá trị nhỏ nhất phải <= giá trị lớn nhất"
+                "Giá trị Min không được lớn hơn Max."
             )
-        return json.dumps({
+
+        config = {
             "min": minimum,
             "max": maximum
-        })
+        }
 
-    return json.dumps({})
+    elif rule_type == "MIN_VALUE":
+        config = {
+            "min": minimum
+        }
+
+    elif rule_type == "MAX_VALUE":
+        config = {
+            "max": maximum
+        }
+
+    elif rule_type == "ALLOWED_VALUES":
+        values = [
+            value.strip()
+            for value in allowed_values.split(",")
+            if value.strip()
+        ]
+
+        if not values:
+            raise ValueError(
+                "Bạn phải nhập ít nhất một giá trị cho phép."
+            )
+
+        config = {
+            "values": values
+        }
+
+    elif rule_type == "REGEX":
+        import re
+
+        regex_pattern = regex_pattern.strip()
+
+        if not regex_pattern:
+            raise ValueError(
+                "Bạn chưa nhập biểu thức REGEX."
+            )
+
+        try:
+            re.compile(regex_pattern)
+        except re.error as e:
+            raise ValueError(
+                f"Biểu thức REGEX không hợp lệ: {e}"
+            )
+
+        config = {
+            "pattern": regex_pattern
+        }
+
+    else:
+        config = {}
+
+    return json.dumps(
+        config,
+        ensure_ascii=False
+    )
+
 
 
 try:
@@ -174,18 +245,47 @@ try:
             RULE_TYPES
         )
 
+        
         minimum = 0.0
         maximum = 100.0
+        allowed_values = ""
+        regex_pattern = ""
 
         if rule_type == "BETWEEN":
             minimum = st.number_input(
-                "Giá trị nhỏ nhất",
+                "Giá trị nhỏ nhất (Min)",
                 value=18.0
             )
+
             maximum = st.number_input(
-                "Giá trị lớn nhất",
+                "Giá trị lớn nhất (Max)",
                 value=30.0
             )
+
+        elif rule_type == "MIN_VALUE":
+            minimum = st.number_input(
+                "Giá trị tối thiểu",
+                value=18.0
+            )
+
+        elif rule_type == "MAX_VALUE":
+            maximum = st.number_input(
+                "Giá trị tối đa",
+                value=60.0
+            )
+
+        elif rule_type == "ALLOWED_VALUES":
+            allowed_values = st.text_input(
+                "Các giá trị cho phép",
+                placeholder="Nam, Nữ, Khác"
+            )
+
+        elif rule_type == "REGEX":
+            regex_pattern = st.text_input(
+                "Biểu thức REGEX",
+                placeholder=r"^[0-9]{10}$"
+            )
+
 
         is_active = st.checkbox(
             "Kích hoạt ngay",
@@ -205,7 +305,11 @@ try:
                 st.error("Bạn chưa nhập tên cột.")
             else:
                 config = tao_config(
-                    rule_type, minimum, maximum
+                    rule_type=rule_type,
+                    minimum=minimum,
+                    maximum=maximum,
+                    allowed_values=allowed_values,
+                    regex_pattern=regex_pattern
                 )
                 
                 # Kiểm tra cột tồn tại trong CSV
@@ -215,7 +319,10 @@ try:
                     )
 
                 # Kiểm tra quy tắc BETWEEN chỉ áp dụng cho dữ liệu số
-                if rule_type == "BETWEEN" and uploaded_csv is not None:
+                if (
+                    rule_type in {"BETWEEN", "MIN_VALUE", "MAX_VALUE"}
+                    and uploaded_csv is not None
+                ):
                     values = preview_df[column_name].dropna()
 
                     if not pd.api.types.is_numeric_dtype(
@@ -305,10 +412,63 @@ try:
                 ) if current["rule_type"] in RULE_TYPES else 0
             )
 
+            
             new_min = 0.0
             new_max = 100.0
+            new_allowed_values = ""
+            new_regex_pattern = ""
 
             if new_type == "BETWEEN":
+                new_min = st.number_input(
+                    "Min",
+                    value=float(
+                        current_config.get("min", 18)
+                    )
+                )
+
+                new_max = st.number_input(
+                    "Max",
+                    value=float(
+                        current_config.get("max", 30)
+                    )
+                )
+
+            elif new_type == "MIN_VALUE":
+                new_min = st.number_input(
+                    "Giá trị tối thiểu",
+                    value=float(
+                        current_config.get("min", 18)
+                    )
+                )
+
+            elif new_type == "MAX_VALUE":
+                new_max = st.number_input(
+                    "Giá trị tối đa",
+                    value=float(
+                        current_config.get("max", 60)
+                    )
+                )
+
+            elif new_type == "ALLOWED_VALUES":
+                values = current_config.get(
+                    "values", []
+                )
+
+                new_allowed_values = st.text_input(
+                    "Các giá trị cho phép",
+                    value=", ".join(
+                        str(v) for v in values
+                    )
+                )
+
+            elif new_type == "REGEX":
+                new_regex_pattern = st.text_input(
+                    "Biểu thức REGEX",
+                    value=current_config.get(
+                        "pattern", ""
+                    )
+                )
+
                 new_min = st.number_input(
                     "Min",
                     value=float(
@@ -338,7 +498,11 @@ try:
                     raise ValueError("Tên cột không được trống")
 
                 config = tao_config(
-                    new_type, new_min, new_max
+                    rule_type=new_type,
+                    minimum=new_min,
+                    maximum=new_max,
+                    allowed_values=new_allowed_values,
+                    regex_pattern=new_regex_pattern
                 )
 
                 thuc_thi("""

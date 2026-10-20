@@ -1,5 +1,7 @@
-
 import re
+import json
+
+import mysql.connector
 import pandas as pd
 
 from modules.database import ket_noi_database
@@ -93,10 +95,6 @@ def doc_bang_mysql(ten_bang, gioi_han=10000):
     finally:
         conn.close()
 
-import re
-import mysql.connector
-import pandas as pd
-
 
 def ket_noi_mysql_nguon(
     host,
@@ -181,54 +179,6 @@ import re
 import pandas as pd
 
 from modules.database import ket_noi_database
-
-
-def doc_bang_mysql_nguon(
-    ten_database,
-    ten_bang,
-    gioi_han=10000
-):
-    """
-    Đọc bảng thuộc database nguồn trên cùng MySQL Server.
-    Không thay đổi database quản lý của dự án.
-    """
-
-    for value in (ten_database, ten_bang):
-        if not isinstance(value, str) or not re.fullmatch(
-            r"[A-Za-z0-9_]+", value
-        ):
-            raise ValueError(
-                "Tên database hoặc bảng không hợp lệ"
-            )
-
-    if type(gioi_han) is not int or not 1 <= gioi_han <= 100000:
-        raise ValueError("Giới hạn không hợp lệ")
-
-    conn = ket_noi_database()
-
-    try:
-        cursor = conn.cursor()
-
-        try:
-            cursor.execute(
-                f"SELECT * FROM `{ten_database}`.`{ten_bang}` "
-                "LIMIT %s",
-                (gioi_han,)
-            )
-
-            rows = cursor.fetchall()
-            columns = cursor.column_names
-
-            return pd.DataFrame(
-                rows,
-                columns=columns
-            )
-
-        finally:
-            cursor.close()
-
-    finally:
-        conn.close()
 
 def doc_bang_mysql_nguon(
     ten_database,
