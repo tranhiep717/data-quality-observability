@@ -4,6 +4,7 @@ import streamlit as st
 import pandas as pd
 
 from modules.database import ket_noi_database
+from modules.ingestion import doc_csv_da_dang_ky, doc_bang_mysql_nguon
 
 st.title("Quản lý quy tắc kiểm tra")
 st.write("Thêm, chỉnh sửa và bật/tắt quy tắc chất lượng dữ liệu.")
@@ -51,9 +52,11 @@ def thuc_thi(sql, params):
 
 def lay_datasets():
     return truy_van("""
-        SELECT dataset_id, dataset_name
-        FROM datasets
-        ORDER BY dataset_id
+        SELECT d.dataset_id, d.dataset_name, d.file_path, d.table_name,
+               s.source_type, s.connection_config
+        FROM datasets d
+        JOIN data_sources s ON d.source_id = s.source_id
+        ORDER BY d.dataset_id
     """)
 
 
@@ -165,33 +168,38 @@ try:
 
     dataset_id = options[selected]
     
-    # Đọc cấu trúc cột từ file CSV
-    import os
-
+    # Nhận diện cột trực tiếp từ dataset đã đăng ký; không upload lần hai.
     st.subheader("Nhận diện cột dữ liệu")
-
-    uploaded_csv = st.file_uploader(
-        "Tải file CSV để lấy danh sách cột",
-        type=["csv"],
-        key="rules_csv"
-    )
-
+    dataset_info = next(d for d in datasets if d["dataset_id"] == dataset_id)
+    preview_df = None
     columns = []
 
-    if uploaded_csv is not None:
-        try:
-            preview_df = pd.read_csv(uploaded_csv)
-            columns = preview_df.columns.tolist()
+    try:
+        source_type = str(dataset_info["source_type"]).upper()
+        if source_type == "CSV":
+            preview_df = doc_csv_da_dang_ky(dataset_info["file_path"])
+        elif source_type == "MYSQL":
+            config = dataset_info["connection_config"] or {}
+            if isinstance(config, str):
+                config = json.loads(config)
+            db_name = config.get("database")
+            table_name = dataset_info["table_name"]
+            if not db_name or not table_name:
+                raise ValueError("Dataset MySQL thiếu database hoặc tên bảng.")
+            preview_df = doc_bang_mysql_nguon(db_name, table_name)
+        else:
+            raise ValueError(f"Nguồn dữ liệu chưa được hỗ trợ: {source_type}")
 
-            st.success(
-                f"Đã nhận diện {len(columns)} cột dữ liệu"
-            )
-
-            st.write("Các cột:", columns)
-
-        except Exception as e:
-            st.error(f"Không đọc được CSV: {e}")
-
+        columns = preview_df.columns.tolist()
+        if not columns:
+            raise ValueError("Không nhận diện được cột dữ liệu.")
+        st.success(f"Đã tự động nhận diện {len(columns)} cột từ dataset.")
+        st.write("Các cột:", columns)
+    except Exception as e:
+        st.error(f"Không thể đọc nguồn đã đăng ký: {e}")
+        st.info("Kiểm tra file_path trong MySQL và sự tồn tại của file CSV; "
+                "với MySQL hãy kiểm tra cấu hình nguồn.")
+        st.stop()
 
     # 2. Hiển thị quy tắc hiện tại
     st.subheader("Danh sách quy tắc")
@@ -229,16 +237,10 @@ try:
 
     with st.form("add_rule_form"):
         
-        if columns:
-            column_name = st.selectbox(
-                "Chọn cột dữ liệu",
-                options=columns
-            )
-        else:
-            column_name = st.text_input(
-                "Tên cột dữ liệu",
-                placeholder="Tải file CSV để chọn cột"
-            )
+        column_name = st.selectbox(
+            "Chọn cột dữ liệu",
+            options=columns
+        )
 
         rule_type = st.selectbox(
             "Loại quy tắc",
@@ -312,24 +314,23 @@ try:
                     regex_pattern=regex_pattern
                 )
                 
-                # Kiểm tra cột tồn tại trong CSV
-                if columns and column_name not in columns:
+                # Bắt buộc rule gắn với cột trong dataset đã chọn.
+                if column_name not in columns:
                     raise ValueError(
-                        f"Cột '{column_name}' không tồn tại trong CSV"
+                        f"Cột '{column_name}' không tồn tại trong dataset"
                     )
 
                 # Kiểm tra quy tắc BETWEEN chỉ áp dụng cho dữ liệu số
                 if (
                     rule_type in {"BETWEEN", "MIN_VALUE", "MAX_VALUE"}
-                    and uploaded_csv is not None
+                    and preview_df is not None
                 ):
-                    values = preview_df[column_name].dropna()
 
                     if not pd.api.types.is_numeric_dtype(
                         preview_df[column_name]
                     ):
                         raise ValueError(
-                            "BETWEEN chỉ áp dụng cho cột dữ liệu số"
+                            "Quy tắc khoảng/ngưỡng chỉ áp dụng cho cột số"
                         )
 
                 
@@ -469,20 +470,6 @@ try:
                     )
                 )
 
-                new_min = st.number_input(
-                    "Min",
-                    value=float(
-                        current_config.get("min", 18)
-                    )
-                )
-
-                new_max = st.number_input(
-                    "Max",
-                    value=float(
-                        current_config.get("max", 30)
-                    )
-                )
-
             new_active = st.checkbox(
                 "Kích hoạt",
                 value=bool(current["is_active"])
@@ -496,6 +483,19 @@ try:
             try:
                 if not new_column.strip():
                     raise ValueError("Tên cột không được trống")
+                if new_column.strip() not in columns:
+                    raise ValueError("Cột không tồn tại trong dataset đã đăng ký")
+                if new_type in {"BETWEEN", "MIN_VALUE", "MAX_VALUE"}:
+                    if not pd.api.types.is_numeric_dtype(preview_df[new_column.strip()]):
+                        raise ValueError("Quy tắc khoảng/ngưỡng chỉ áp dụng cho cột số")
+
+                duplicate = truy_van("""
+                    SELECT rule_id FROM quality_rules
+                    WHERE dataset_id = %s AND column_name = %s
+                      AND rule_type = %s AND rule_id <> %s LIMIT 1
+                """, (dataset_id, new_column.strip(), new_type, current["rule_id"]))
+                if duplicate:
+                    raise ValueError("Một quy tắc cùng cột và loại đã tồn tại")
 
                 config = tao_config(
                     rule_type=new_type,

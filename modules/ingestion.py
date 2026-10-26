@@ -467,3 +467,38 @@ def tim_dataset_mysql(ten_database, ten_bang):
 
     finally:
         conn.close()
+
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+UPLOAD_DIR = (PROJECT_ROOT / "data" / "uploads").resolve()
+
+
+def doc_csv_da_dang_ky(file_path):
+    """
+    Đọc file CSV đã đăng ký trong bảng datasets.
+    Không cần upload lại file trên Streamlit.
+    """
+
+    if not file_path:
+        raise ValueError(
+            "Dataset chưa có đường dẫn file CSV."
+        )
+
+    # Chuyển đường dẫn được lưu trong MySQL
+    # thành đường dẫn tuyệt đối trên máy
+    path = (PROJECT_ROOT / file_path).resolve()
+
+    # Chỉ cho phép truy cập file thuộc data/uploads
+    if not path.is_relative_to(UPLOAD_DIR):
+        raise ValueError(
+            "Đường dẫn CSV không thuộc thư mục uploads."
+        )
+
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Không tìm thấy CSV đã đăng ký: {path.name}"
+        )
+
+    # Sử dụng lại hàm đọc CSV của dự án
+    return doc_file_csv(path)
